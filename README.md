@@ -35,7 +35,11 @@
    - `output wire o_fp32_output_overflow;` Indicates if the output has overflow
    - `output wire o_fp32_output_underflow;` Indicates if the output doesn't have overflow
 3. 内部逻辑描述: 
+
+   <center>
    <img src="./README.md.pic/image.png" width="40%">
+   </center>
+
    1. 输入处理: 
       - 把 A、B 拆成符号 s、指数 e、尾数 f $\in [1,2)$; 并处理特殊情况: 
         - e = 0 && f = 0: 0
