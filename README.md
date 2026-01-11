@@ -31,9 +31,9 @@
    - `output wire [31:0] o_fp32_output;` = i_fp32_a * i_fp32_b = $(1.{f_a} \times 1.{f_b}) \times 2^{(e_a-127+e_b-127)}$ 
    - `output wire o_fp32_output_is_zero;` Indicates if the output is 0
    - `output wire o_fp32_output_is_inf;` Indicates if the output is infinite
-   - `output wire o_fp32_output_is_nan;` Indicates if the output is not a number
+   - `output wire o_fp32_output_is_NaN;` Indicates if the output is not a number
    - `output wire o_fp32_output_overflow;` Indicates if the output has overflow
-   - `output wire o_fp32_output_underflow;` Indicates if the output doesn't have overflow
+   - `output wire o_fp32_output_underflow;` Indicates if the output has underflow
 3. 内部逻辑描述: 
 
     <center><img src="./README.md.pic/image.png" width="40%"></center>
@@ -42,19 +42,34 @@
       - 把 A、B 拆成符号 s、指数 e、尾数 f $\in [1,2)$; 并处理特殊情况: 
         - e = 0 && f = 0: 0
         - e = 255 && f = 0: inf
-        - e = 255 && f != 0: nan
-        - e = 0 && f = 0: denormal/ subnormal
-      - 符号处理 = sa XOR sb
-   2. 尾数相乘 [-1:-46] f_output_initial = 1.fa * 1.fb $\in [1,4)$, 再移位置[-1:-46] f_c
+        - e = 255 && f != 0: NaN
+        - e = 0 && f != 0: denormal/ subnormal
+      - 符号处理 s_output = s_a XOR s_b
+      - overflow监测: 
+   2. 尾数相乘 [-1:-46] f_output_initial = 1.f_a * 1.f_b $\in [1,4)$, 再移位置[-1:-46] f_c
       - if (1 <= f_output_initial <2) f_output = f_output_initial
       - if (f_output_initial >=2) f_output = f_output_initial >> 1
-   3. 阶码相加 e_output_initial = e_a - 127 + e_b, 根据尾数是否移位再调整
+   3. 阶码相加 [8:0] e_output_initial = e_a - 127 + e_b, 根据尾数是否移位再调整
       - if (1 <= f_output_initial <2) e_output = e_output_initial 
       - if (1 <= f_output_initial <2) e_output = e_output_initial + 1
-   4. 尾数舍入处理: 因为尾数相乘会产生比 23 位更多的位数，最后只能存 23 位，所以要按规则截断。这里使用: 就近舍入 + ties to even（最近，遇到正中间选偶数）
-      - 如果被丢掉的部分明显>=一半/ f_c_initial[-14] == 1: 进 1
-      - 如果明显<一半/ f_c_initial[-14] == 0: 不变
-      - 如果刚好一半: 如果最后保留位是奇数，进位，让它变偶; 如果最后保留位是偶数, 不进位
+   4. 尾数舍入处理: 因为尾数相乘会产生比 23 位更多的位数，最后只能存 23 位，所以要按规则截断。这里使用: 正向四舍五入
+      - 正数
+        - 如果被丢掉的部分明显>=一半/ f_output_initial[-14] == 1: 进 1
+        - 如果明显<一半/ f_output_initial[-14] == 0: 不变
+      - 负数: 直接截断
    5. if f_c 全是 1 (1.1111 舍入进位 → 10.0000), 尾数 & 阶码 需要再调整:
       - 尾数 f_output = f_output_initial >> 1 
       - 阶码 e_output = e_output_initial + 1
+   6. overflow/underflow 监测
+      - (这里可省略) 阶码第一次相加后，if e_output_initial = e_a - 127 + e_b >= 255, 产生overflow
+      - 阶码再调整后，if e_output >= 255, 产生overflow
+      - 阶码再调整后，if e_output <= 0, 产生underflow
+   7. 通路选择
+      ```verilog
+      if (is_NaN) {1'b0, 8'hff, 23'h1}
+      else if (is_inf) {s_output, 8'hff, 23'h0}
+      else if (is_zero) {s_output, 8'h0, 23'h0}
+      else if (underflow) {s_output, 8'h0, 23'h0}
+      else if (overflow) {s, 8'hff, 23'h0}
+      else 原乘法计算结果
+      ```
