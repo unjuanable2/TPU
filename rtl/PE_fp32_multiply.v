@@ -42,11 +42,18 @@ wire s_output = s_a ^ s_b;
 
 // 2. Multiply the fractions
 wire [47:0] f_output_initial = (48'h1 << 23 | f_a) * (48'h1 << 23 | f_b); // 1.f_a * 1.f_b
-         // f_output_initial[47:46] is the integer part, f_output_initial[45:0] is the fractional part
-wire [22:0] f_output;
-assign f_output = (f_output_initial[47:46] < 2'b01) ? f_output_initial[45:23] : // if f_output_initial < 2, it is already
-                  (f_output_initial >> 1)[45:23]; 
+         // f_output_initial[47:46] is the integer part in [1,4), f_output_initial[45:0] is the fractional part
+wire [47:0] f_output = (f_output_initial[47:46] < 2'b01) ? f_output_initial : // if f_output_initial < 2, it is already
+                       f_output_initial >> 1; 
+         // f_output[47] is the integer part in [1,2), f_output[46:0] is the fractional part.
 
+// 3. Add the exponents
+wire [8:0] e_output_initial = e_a + e_b - 8'd127; // e_a - 127 + e_b - 127 + 127 = e_a + e_b - 127
+wire [8:0] e_output = (f_output_initial[47:46] < 2'b01) ? e_output_initial : 
+                      e_output_initial + 1;
+
+// 4. 尾数舍入处理 fraction rounding (rule: 正向四舍五入)
+wire 
 
 
 

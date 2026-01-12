@@ -45,7 +45,6 @@
         - e = 255 && f != 0: NaN
         - e = 0 && f != 0: denormal/ subnormal
       - 符号处理 s_output = s_a XOR s_b
-      - overflow监测: 
    2. 尾数相乘 [47:0] f_output_initial = 1.f_a * 1.f_b $\in [1,4)$, 再移位置[22:0] f_output
       - if (1 <= f_output_initial <2) f_output = f_output_initial[45:23]
       - if (f_output_initial >=2) f_output = (f_output_initial >> 1)[45:23]
@@ -57,7 +56,7 @@
         - 如果被丢掉的部分明显>=一半/ f_output_initial[-14] == 1: 进 1
         - 如果明显<一半/ f_output_initial[-14] == 0: 不变
       - 负数: 直接截断
-   5. if f_c 全是 1 (1.1111 舍入进位 → 10.0000), 尾数 & 阶码 需要再调整:
+   5. if f_output 全是 1 (1.1111 舍入进位 → 10.0000), 尾数 & 阶码 需要再调整:
       - 尾数 f_output = f_output_initial >> 1 
       - 阶码 e_output = e_output_initial + 1
    6. overflow/underflow 监测
