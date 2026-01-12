@@ -41,7 +41,11 @@ assign o_fp32_output_is_nan = a_is_nan || b_is_nan || (a_is_inf && b_is_inf);
 wire s_output = s_a ^ s_b; 
 
 // 2. Multiply the fractions
-
+wire [47:0] f_output_initial = (48'h1 << 23 | f_a) * (48'h1 << 23 | f_b); // 1.f_a * 1.f_b
+         // f_output_initial[47:46] is the integer part, f_output_initial[45:0] is the fractional part
+wire [22:0] f_output;
+assign f_output = (f_output_initial[47:46] < 2'b01) ? f_output_initial[45:23] : // if f_output_initial < 2, it is already
+                  (f_output_initial >> 1)[45:23]; 
 
 
 

@@ -46,9 +46,9 @@
         - e = 0 && f != 0: denormal/ subnormal
       - 符号处理 s_output = s_a XOR s_b
       - overflow监测: 
-   2. 尾数相乘 [47:0] f_output_initial = 1.f_a * 1.f_b $\in [1,4)$, 再移位置[47:0] f_output
-      - if (1 <= f_output_initial <2) f_output = f_output_initial
-      - if (f_output_initial >=2) f_output = f_output_initial >> 1
+   2. 尾数相乘 [47:0] f_output_initial = 1.f_a * 1.f_b $\in [1,4)$, 再移位置[22:0] f_output
+      - if (1 <= f_output_initial <2) f_output = f_output_initial[45:23]
+      - if (f_output_initial >=2) f_output = (f_output_initial >> 1)[45:23]
    3. 阶码相加 [8:0] e_output_initial = e_a - 127 + e_b, 根据尾数是否移位再调整
       - if (1 <= f_output_initial <2) e_output = e_output_initial 
       - if (1 <= f_output_initial <2) e_output = e_output_initial + 1
