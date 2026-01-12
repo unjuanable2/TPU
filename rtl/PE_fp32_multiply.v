@@ -40,7 +40,8 @@ assign o_fp32_output_is_nan = a_is_nan || b_is_nan || (a_is_inf && b_is_inf);
 // 1.3. Decide the sign of the output
 wire s_output = s_a ^ s_b; 
 
-// 2. Multiply the fractions 
+// 2. Multiply the fractions
+
 
 
 
