@@ -51,7 +51,7 @@
    3. 阶码相加 [8:0] e_output_initial = e_a - 127 + e_b, 根据尾数是否移位再调整
       - if (1 <= f_output_initial <2) e_output = e_output_initial 
       - if (1 <= f_output_initial <2) e_output = e_output_initial + 1
-   4. 尾数舍入处理: 因为尾数相乘会产生比 23 位更多的位数，最后只能存 23 位，所以要按规则截断。这里使用: 正向四舍五入
+   4. 尾数舍入处理: 因为尾数相乘会产生比 23 位更多的位数，最后只能存 23 位 [22:0] f_output_rounded，所以要按规则截断。这里使用: 正向四舍五入
       - 正数
         - 如果被丢掉的部分明显>=一半/ f_output_initial[-14] == 1: 进 1
         - 如果明显<一半/ f_output_initial[-14] == 0: 不变
