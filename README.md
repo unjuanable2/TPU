@@ -45,19 +45,15 @@
         - e = 255 && f != 0: NaN
         - e = 0 && f != 0: denormal/ subnormal
       - 符号处理 s_output = s_a XOR s_b
-   2. 尾数相乘 [47:0] f_output_initial = 1.f_a * 1.f_b $\in [1,4)$, 再移位置[22:0] f_output
-      - if (1 <= f_output_initial <2) f_output = f_output_initial[45:23]
-      - if (f_output_initial >=2) f_output = (f_output_initial >> 1)[45:23]
-   3. 阶码相加 [8:0] e_output_initial = e_a - 127 + e_b, 根据尾数是否移位再调整
+   2. 尾数相乘 [47:0] f_output_initial = 1.f_a * 1.f_b $\in [1,4)$ ([47:46]是整数部分, [45:0]是小数部分), 再移位置 [47:0] f_output ([47:46]是整数部分, [45:0]是小数部分)
+      - if (1 <= f_output_initial <2) f_output = f_output_initial
+      - if (f_output_initial >=2) f_output = (f_output_initial >> 1)
+   3. 阶码相加 [8:0] e_output_initial = e_a - 127 + e_b, 根据尾数是否移位再调整 [8:0] e_output
       - if (1 <= f_output_initial <2) e_output = e_output_initial 
       - if (1 <= f_output_initial <2) e_output = e_output_initial + 1
-   4. 尾数舍入处理: 因为尾数相乘会产生比 23 位更多的位数，最后只能存 23 位 [22:0] f_output_rounded，所以要按规则截断。这里使用: 正向四舍五入
-      - 正数
-        - 如果被丢掉的部分明显>=一半/ f_output_initial[-14] == 1: 进 1
-        - 如果明显<一半/ f_output_initial[-14] == 0: 不变
-      - 负数: 直接截断
+   4. 尾数舍入处理: 因为尾数相乘会产生比 23 位更多的位数，最后只能存 23 位 [22:0] f_output_rounded，所以要按规则截断。这里使用: RNE算法
    5. if f_output 全是 1 (1.1111 舍入进位 → 10.0000), 尾数 & 阶码 需要再调整:
-      - 尾数 f_output = f_output_initial >> 1 
+      - 尾数 [22:0] f_output_final = f_output_rounded >> 1 
       - 阶码 e_output = e_output_initial + 1
    6. overflow/underflow 监测
       - (这里可省略) 阶码第一次相加后，if e_output_initial = e_a - 127 + e_b >= 255, 产生overflow
@@ -69,6 +65,20 @@
       else if (is_inf) {s_output, 8'hff, 23'h0}
       else if (is_zero) {s_output, 8'h0, 23'h0}
       else if (underflow) {s_output, 8'h0, 23'h0}
-      else if (overflow) {s, 8'hff, 23'h0}
+      else if (overflow) {s_output, 8'hff, 23'h0}
       else 原乘法计算结果
       ```
+4. 补充: 截断规则
+   - RZ算法: 直接截断
+   - 正无穷舍入:
+     - 对正数: 只要 f_output [22:0] 有1, f_output_rounded = f_output [45:23] + 1;
+     - 对负数: 直接截断
+   - 正向四舍五入:
+     - 正数
+        - 如果被丢掉的部分明显>=一半/ f_output[22] == 1: 进 1
+        - 如果明显<一半/ f_output[22] == 0: 不变
+      - 负数: 直接截断
+   - RNE算法:
+     - 如果被丢掉的部分>一半/ f_output[22] == 1 && f_output[21:0] != 0: 进 1
+     - 如果<一半: 不变
+     - 如果=一半 / f_output[22] == 1 && f_output[21:0] == 0: 如果最后保留位是奇数, 进 1; 是偶数, 不变Special
