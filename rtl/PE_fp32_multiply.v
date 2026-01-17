@@ -23,15 +23,15 @@ wire [7:0] e_b = i_fp32_b[30:23];
 wire [22:0] f_b = i_fp32_b[22:0];
 
 // 1.2. Handle special cases (zero, inf, NaN, subnormal)
-wire a_is_zero = (e_a == 8'b0) && (f_a == 23'b0);
+wire a_is_zero = (e_a == 8'b0) ;//&& (f_a == 23'b0);
 wire a_is_inf = (e_a == 8'b11111111) && (f_a == 23'b0);
 wire a_is_nan = (e_a == 8'b11111111) && (f_a != 23'b0);
-wire a_is_subnormal = (e_a == 8'b0) && (f_a != 23'b0); // not used here
+//wire a_is_subnormal = (e_a == 8'b0) && (f_a != 23'b0); // not used here
 
-wire b_is_zero = (e_b == 8'b0) && (f_b == 23'b0);
+wire b_is_zero = (e_b == 8'b0) ;//&& (f_b == 23'b0); // zero+subnormal
 wire b_is_inf = (e_b == 8'b11111111) && (f_b == 23'b0);
 wire b_is_nan = (e_b == 8'b11111111) && (f_b != 23'b0);
-wire b_is_subnormal = (e_b == 8'b0) && (f_b != 23'b0); // not used here
+//wire b_is_subnormal = (e_b == 8'b0) && (f_b != 23'b0); // not used here
 
 // 输出NaN: a or b is NaN, or inf * 0 / 0 * inf
 assign o_fp32_output_is_nan = a_is_nan || b_is_nan || (a_is_inf && b_is_zero) || (a_is_zero && b_is_inf);
@@ -52,7 +52,7 @@ wire [47:0] f_output_1 = (f_output_0[47] == 1'b0) ? f_output_0 : // if f_output_
 
 /* 3. Add the exponents */
 wire signed [10:0] e_output_0 = {2'b0, e_a} + {2'b0, e_b} - 10'd127; // e_a - 127 + e_b - 127 + 127 = e_a + e_b - 127
-wire signed [10:0] e_output_1 = (f_output_1[47] == 1'b0) ? e_output_0 : 
+wire signed [10:0] e_output_1 = (f_output_0[47] == 1'b0) ? e_output_0 : 
                       e_output_0 + 1;
 
 /* 4. 尾数舍入处理 fraction rounding (rule: RNE/ round-to-nearest-even) */
@@ -63,12 +63,12 @@ wire [24:0] f_output_rounded =  f_output_2 + {24'b0, inc};
 /* 5. special case: if f_output_2 are all 1s (01.1111...1), 
 f_output_rounded is 10.0000, so we need to set f_output to 0 and add 1 to e_output
 */
-wire [22:0] f_output_final = (f_output_2 == 25'h1ffffff) ? f_output_rounded[23:1] : f_output_rounded[22:0];
-wire signed [10:0] e_output_final = (f_output_2 == 25'h1ffffff) ? e_output_1 + 1 : e_output_1;
+wire [22:0] f_output_final = (f_output_rounded[24] == 1'b1) ? f_output_rounded[23:1] : f_output_rounded[22:0];
+wire signed [10:0] e_output_final = (f_output_rounded[24] == 1'b1) ? e_output_1 + 1 : e_output_1;
 
 /* 6. Handle overflow and underflow */
-assign o_fp32_output_overflow = (e_output_final >= 11'b01111111111) && !o_fp32_output_is_inf && !o_fp32_output_is_nan; // overflow
-assign o_fp32_output_underflow = (e_output_final <= 11'b0) && !o_fp32_output_is_zero; // underflow
+assign o_fp32_output_overflow = (e_output_final >= 11'sd255) && !o_fp32_output_is_inf && !o_fp32_output_is_nan; // overflow
+assign o_fp32_output_underflow = (e_output_final <= 11'sd0) && !o_fp32_output_is_inf && !o_fp32_output_is_nan; // underflow
 
 /* 7. Construct the output */
 assign o_fp32_output = o_fp32_output_is_nan ? {1'b0, 8'b11111111, 23'h1} : // NaN
