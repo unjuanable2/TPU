@@ -11,10 +11,10 @@
 
 ## processing unit: PE.v
 1. 概述: 每个PE模块对输入 `i_a`, `i_b` 支持四种精度运算(fp32, fp16, int8, int4), 针对不同的精度做不同的运算
-   - 针对fp32: fp32 浮点数乘法 `PE_fp32_multiply.v`, 位宽变换
-   - 针对fp16: 对输入取低16位, fp32 浮点数乘法 `PE_fp32_multiply.v`, 位宽变换
+   - 针对fp32: fp32 浮点数乘法 `PE_fp32_multiply.v` (including 位宽变换)
+   - 针对fp16: 对输入取低16位, fp32 浮点数乘法 `PE_fp32_multiply.v` (including 位宽变换)
    - 针对int8: 浮定转换, 定点数乘法, 位宽变换, 定浮转换
-   - 针对int4: 定点数乘法, 位宽变换
+   - 针对int4: 浮定转换, 定点数乘法, 位宽变换
 2. I/O interface:
    - `input wire [31:0] i_a;`
    - `input wire [31:0] i_b;`
@@ -46,7 +46,7 @@
         - e = 0 && f != 0: denormal/ subnormal
       - 符号处理 s_output = s_a XOR s_b
    2. 尾数相乘 [47:0] f_output_initial = 1.f_a * 1.f_b $\in [1,4)$ ([47:46]是整数部分, [45:0]是小数部分), 再移位置 [47:0] f_output ([47:46]是整数部分, [45:0]是小数部分)
-      - if (1 <= f_output_initial <2) f_output = f_output_initial
+      - if (1 <= f_output_initial <2) f_output                                           = f_output_initial
       - if (f_output_initial >=2) f_output = (f_output_initial >> 1)
    3. 阶码相加 [8:0] e_output_initial = e_a - 127 + e_b, 根据尾数是否移位再调整 [8:0] e_output
       - if (1 <= f_output_initial <2) e_output = e_output_initial 
