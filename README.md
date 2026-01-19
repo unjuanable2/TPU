@@ -35,31 +35,27 @@
    - `output wire o_fp32_output_overflow;` Indicates if the output has overflow
    - `output wire o_fp32_output_underflow;` Indicates if the output has underflow
 3. 内部逻辑描述: 
-
-    <center><img src="./README.md.pic/image.png" width="40%"></center>
+   
+   <center><img src="./README.md.pic/image.png" width="40%"></center>
 
    1. 输入处理: 
       - 把 A、B 拆成符号 s、指数 e、尾数 f $\in [1,2)$; 并处理特殊情况: 
-        - e = 0 && f = 0: 0
-        - e = 255 && f = 0: inf
-        - e = 255 && f != 0: NaN
-        - e = 0 && f != 0: denormal/ subnormal
-      - 符号处理 s_output = s_a XOR s_b
-   2. 尾数相乘 [47:0] f_output_initial = 1.f_a * 1.f_b $\in [1,4)$ ([47:46]是整数部分, [45:0]是小数部分), 再移位置 [47:0] f_output ([47:46]是整数部分, [45:0]是小数部分)
-      - if (1 <= f_output_initial <2) f_output                                           = f_output_initial
-      - if (f_output_initial >=2) f_output = (f_output_initial >> 1)
-   3. 阶码相加 [8:0] e_output_initial = e_a - 127 + e_b, 根据尾数是否移位再调整 [8:0] e_output
-      - if (1 <= f_output_initial <2) e_output = e_output_initial 
-      - if (1 <= f_output_initial <2) e_output = e_output_initial + 1
-   4. 尾数舍入处理: 因为尾数相乘会产生比 23 位更多的位数，最后只能存 23 位 [22:0] f_output_rounded，所以要按规则截断。这里使用: RNE算法
-   5. if f_output 全是 1 (1.1111 舍入进位 → 10.0000), 尾数 & 阶码 需要再调整:
-      - 尾数 [22:0] f_output_final = f_output_rounded >> 1 
-      - 阶码 e_output = e_output_initial + 1
-   6. overflow/underflow 监测
-      - (这里可省略) 阶码第一次相加后，if e_output_initial = e_a - 127 + e_b >= 255, 产生overflow
-      - 阶码再调整后，if e_output >= 255, 产生overflow
-      - 阶码再调整后，if e_output <= 0, 产生underflow
-   7. 通路选择
+        - 如果 e = 0 并且 f = 0，则认为输入数是 0
+        - 如果 e = 255 并且 f = 0，则认为输入数是 inf
+        - 如果 e = 255 并且 f != 0，则认为输入数是 NaN
+        - 如果 e = 0 并且 f != 0，则认为输入数是 denormal/ subnormal
+      - 决定输出的符号位 = 输入 a 的符号位和输入 b 的符号位的XOR的结果
+   2. 尾数相乘 `[47:0] f_multi` = 1.f_a * 1.f_b $\in [1,4)$ 
+      - 注：`f_multi[47:46]`代表整数部分, `f_multi[45:0]`代表小数部分
+   3. 阶码相加 `signed [9:0] e_add` = e_a - 127 + e_b
+   4. 规格化移位对尾数和阶码的调整：如果尾数乘积结果大于等于2，则需要右移一位，并且阶码加1。调整后得到 `[47:0] f_multi_shift`, `signed [9:0] e_add_shift`
+   5. 尾数舍入处理: 因为尾数相乘会产生比 23 位更多的位数，最后只能存 23 位 `[24:0] f_round`，所以要按规则截断多余的23位。这里使用: RNE算法。
+      - 注：`f_round[24:23]`代表整数部分, `f_multi[22:0]`代表应该要存的23位小数部分
+   6. 处理一种特殊情况：如果 `f_multi_shift` 的整数部分是 1.1111...1，在舍入处理后 `f_round` 会变成 10.0000...0，这时需要将尾数再次移位（调整为 01.0000...0），并且阶码再次加1。调整后得到 `[22:0] f_out`, `signed [9:0] e_out`
+   7. overflow/underflow 监测
+      - 如果 `e_out` >= 255, 则表明产生overflow
+      - 如果 `e_out` <= 0, 则表明产生underflow
+   8. 通路选择并且包装输出 `[31:0] out`
       ```verilog
       if (is_NaN) {1'b0, 8'hff, 23'h1}
       else if (is_inf) {s_output, 8'hff, 23'h0}
@@ -68,17 +64,17 @@
       else if (overflow) {s_output, 8'hff, 23'h0}
       else 原乘法计算结果
       ```
-4. 补充: 截断规则
+4. 补充: 截断规则。假设 `[47:0] f_multi_shift` 是截断前的数，`[24:0] f_round`是截断后的数
    - RZ算法: 直接截断
    - 正无穷舍入:
-     - 对正数: 只要 f_output [22:0] 有1, f_output_rounded = f_output [45:23] + 1;
+     - 对正数: 只要 `f_multi_shift [22:0]` 有1, `f_round = f_multi_shift [47:23] + 1`;
      - 对负数: 直接截断
-   - 正向四舍五入:
+   - 正向四舍五入: 假设 R 位是 `f_multi_shift[22]`, S 位是 `|(f_multi_shift[21:0])`
      - 正数
-        - 如果被丢掉的部分明显>=一半/ f_output[22] == 1: 进 1
-        - 如果明显<一半/ f_output[22] == 0: 不变
+        - 如果被丢掉的部分明显>=一半，也就是说 R位是1: 进 1
+        - 如果明显<一半，也就是说 R位是0: 不变
       - 负数: 直接截断
-   - RNE算法:
-     - 如果被丢掉的部分>一半/ f_output[22] == 1 && f_output[21:0] != 0: 进 1
-     - 如果<一半: 不变
-     - 如果=一半 / f_output[22] == 1 && f_output[21:0] == 0: 如果最后保留位是奇数, 进 1; 是偶数, 不变Special
+   - RNE算法: 假设 R 位是 `f_multi_shift[22]`, S 位是 `|(f_multi_shift[21:0])`
+     - 如果被丢掉的部分>一半，也就是说 R位是1并且S位是1: 进 1
+     - 如果<一半，也就是说 R位是0: 不变
+     - 如果=一半，也就是说 R位是1并且S位是0: 如果最后保留位`f_multi_shift[23]`是奇数, 进1; 是偶数, 不变Special
