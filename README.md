@@ -109,20 +109,20 @@
       else if (overflow) {s_out, 8'hff, 23'h0}
       else 原乘法计算结果 {s_out, e_out[7:0], f_out}
       ```
-4. 补充: 截断规则: 对于某个数 `[22:0] x`, 截断后的数为 `[22:0] y`
+4. 补充: 截断规则: 对于某个数 `[45:0] x`, 截断后的数为 `[22:0] y`
    - RZ算法: 直接截断
    - 正无穷舍入:
-     - 对正数: 只要 `x[22:0]` 有1, `y = f_output [45:23] + 1;
+     - 对正数: 只要 `x[22:0]` 有1, `y = f_output [45:23] + 1`;
      - 对负数: 直接截断
    - 正向四舍五入:
      - 正数
-        - 如果被丢掉的部分明显>=一半, i.e., `f_multi_shift[22] == 1`: 进 1
-        - 如果明显<一半/ f_output[22] == 0: 不变
+        - 如果被丢掉的部分明显>=一半, i.e., `x[22] == 1`: 进 1
+        - 如果明显<一半, i.e., `x[22] == 0`: 不变
       - 负数: 直接截断
    - RNE算法:
-     - 如果被丢掉的部分>一半/ f_output[22] == 1 && f_output[21:0] != 0: 进 1
+     - 如果被丢掉的部分>一半, i.e., `x[22] == 1 && x[21:0] != 0`: 进 1
      - 如果<一半: 不变
-     - 如果=一半 / f_output[22] == 1 && f_output[21:0] == 0: 如果最后保留位是奇数, 进 1; 是偶数, 不变Special
+     - 如果=一半, i.e., `x[22] == 1 && x[21:0] == 0`: 如果最后保留位是奇数, 进 1; 是偶数, 不变Special
 
 #### 浮定转换 `pe_fp16_int16.v` 
 1. 概述: 使用 IEEE 16-bit floating-point binary format 定义的16位浮点数 (`[15]` sign; `[14:10]` 5-bit exponent; `[9:0]` 10-bit fraction; bias = 15) 实现 16 位浮点数到 16 位 int 定点数的转换
@@ -194,17 +194,17 @@
         - 如果 `s_in == 0`，直接使用输入作为绝对值, i.e., `[31:0] mag_in = in`
       - `in_is_zero = (in == 32'b0)`
    2. 最高有效1检测/ LOD/ Leading one detect: 找到 `mag_in` 最高位的 1 (整数最高有效位)，记为 `[4:0] lod_index` (范围 `[0,31]`).
-   3. 生成阶码 `[7:0] exp = 8'd127 + lod_index;`
+   3. 生成阶码 `[7:0] exp_base = 8'd127 + lod_index;`
    4. 尾数移位:
       - 如果 `lod_index <= 23`，说明 int32 的有效位可以完整放入 FP32 的 23-bit fraction，需要左移对齐, i.e.,
         - `[23:0] mag_in_shift = mag_in << (23 - lod_index);`
         - `[22:0] frac = mag_in_shift[22:0];`
       - 如果 `lod_index > 23`，说明低位需要被截断，需要右移对齐, i.e.,
         - `[23:0] mag_in_shift = mag_in >> (lod_index - 23);`
-   5. 舍入处理: 当 `lod_index > 23` 时，使用 round bit (被截断部分的最高位) 和 sticky bit (更低被截断位的 OR) 做 RNE 风格舍入.
+   5. 舍入处理: 当 `lod_index > 23` 时，使用 Round-bit (被截断部分的最高位) 和 Sticky-bit (更低被截断位的 OR) 做 RNE 风格舍入.
       - 当 `round_bit == 1` 且 `(sticky_bit == 1 || mag_in_shift[0] == 1)` 时进位, i.e., `[24:0] mag_in_round = {1'b0, mag_in_shift} + 1'b1;`
-      - 如果舍入后尾数进位，指数 `exp` 加 1，尾数右移一位
-   6. 通路选择:
+      - 如果舍入后尾数进位，指数 `exp_base` 加 1 变成 `exp`，尾数右移一位
+   6. 通路选择输出:
       ```verilog
       if (in_is_zero) out = 32'h00000000;
       else            out = {s_in, exp, frac};
@@ -213,10 +213,10 @@
       - `out/out_is_zero/vld_out` 在 `vld_in` 有效后的下一个时钟输出
 
 #### fp32加法 `pe_fp32.v`
-1. 概述: 使用 IEEE 32-bit floating-point binary format 定义的32位浮点数 (`[31]` sign; `[30:23]` 8-bit exponent; `[22:0]` 23-bit fraction; bias = 127) 实现 FP32 加法。当前 RTL 文件为 `pe_fp32_adder.v`，模块名为 `FP32_ADDER`
+1. 概述: 使用 IEEE 32-bit floating-point binary format 定义的32位浮点数 (`[31]` sign; `[30:23]` 8-bit exponent; `[22:0]` 23-bit fraction; bias = 127) 实现 FP32 加法。
 2. I/O interface:
-   - `input wire [31:0] src1;` FP32 input operand 1
-     `input wire [31:0] src2;` FP32 input operand 2
+   - `input wire [31:0] a;` FP32 input operand 1
+     `input wire [31:0] b;` FP32 input operand 2
    - `output reg [31:0] out;` FP32 addition result
 3. 内部逻辑描述:
    
