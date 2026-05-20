@@ -200,7 +200,7 @@
         - `[23:0] mag_in_shift = mag_in << (23 - lod_index);`
         - `[22:0] frac = mag_in_shift[22:0];`
       - 如果 `lod_index > 23`，说明低位需要被截断，需要右移对齐, i.e.,
-        - `[23:0] mag_in_shift = mag_in >> (lod_index - 23);`
+        - `[2:0] mag_in_shift = mag_in >> (lod_index - 23);`
    5. 舍入处理: 当 `lod_index > 23` 时，使用 Round-bit (被截断部分的最高位) 和 Sticky-bit (更低被截断位的 OR) 做 RNE 风格舍入.
       - 当 `round_bit == 1` 且 `(sticky_bit == 1 || mag_in_shift[0] == 1)` 时进位, i.e., `[24:0] mag_in_round = {1'b0, mag_in_shift} + 1'b1;`
       - 如果舍入后尾数进位，指数 `exp_base` 加 1 变成 `exp`，尾数右移一位

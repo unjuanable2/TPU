@@ -25,19 +25,22 @@ reg [5:0] lod_index; // range [0,31], 表示输入中最高位1的位置，0表�
 integer   i;
 
 // 3. 生成阶码
-wire [7:0]  exp;
+wire [7:0]  exp_base;
 
 // 4. 尾数移位
 wire [4:0]  lshift; // 左移位数, range [0,31]
 wire [4:0]  rshift; // 右移位数, range [0,31]
 wire [23:0] mag_in_shift; // 根据lod_index对输入绝对值进行移位后的结果
                           // hidden bit + 23-bit fraction
-wire [22:0] frac; // 最终的23位fraction部分                          
 
 // 5. 尾数舍入处理
-wire round_bit;
-wire sticky_bit;
-wire [24:0] mag_in_round; // 舍入后的尾数，包含hidden bit和fraction部分
+wire        mag_in_R_bit;
+wire        mag_in_S_bit;
+wire        mag_in_round_inc; 
+wire [24:0] mag_in_round; // 舍入后的尾数，{0, hidden bit, fraction}，
+                          // 可能会有25位是因为舍入可能会导致进位
+wire [22:0] frac; // 最终的23位fraction部分                          
+wire [7:0]  exp;
 
 // 6. 拼接输出
 wire [31:0] out_pre; // 拼接后的输出结果，未打拍
@@ -62,41 +65,39 @@ always @(*) begin
 end
 
 // 3. 生成阶码
-assign exp = in_is_zero ? 8'd0 : (8'd127 + {2'b0, lod_index});
+assign exp_base = in_is_zero ? 8'd0 : (8'd127 + {2'b0, lod_index});
 
 // 4. 尾数移位
 assign lshift = 5'd23 - lod_index[4:0];
 assign rshift = lod_index[4:0] - 5'd23;
 assign mag_in_shift = in_is_zero ? 24'd0 :
-                   (lod_index <= 6'd23) ? (mag_in << lshift) :
-                                          (mag_in >> rshift);
+                      (lod_index <= 6'd23) ? (mag_in << lshift) :
+                                             (mag_in >> rshift);
 
-// 5. 尾数舍入处理    
-always @(*) begin
-  if (lod_index <= 6'd23) begin // 左移
-    // 需要右移，可能会有舍入和sticky bit
-    round_bit = mag_in[rshift - 1'b1];
-    sticky_bit = |(mag_in & ((32'h1 << (rshift - 1'b1)) - 32'h1));
-    mag_in_round = {1'b0, mag_in_shift[23:0]} + round_bit + sticky_bit;
-  end else begin // 右移
-    frac = mag_in_shift[22:0]; // 取 mag_in_shift 的低 23 位作为 fraction 部分
-  end
-end                                       
-assign round_bit = (lod_index > 6'd23) ? mag_in[rshift - 1'b1] : 1'b0;
-assign sticky_mask = (lod_index > 6'd24) ? ((32'h1 << (rshift - 1'b1)) - 32'h1) : 32'd0;
-assign sticky_bit = (lod_index > 6'd23) ? |(mag_in & sticky_mask) : 1'b0;
-assign round_inc = (lod_index > 6'd23) && round_bit && (sticky_bit || mant_keep[0]);
-assign mant_round = {1'b0, mant_keep} + round_inc;
-assign exp_pre = in_is_zero ? 8'd0 :
-                 ((lod_index > 6'd23) && mant_round[24]) ? (exp + 1'b1) :
-                                                            exp;
-assign frac_pre = in_is_zero ? 23'd0 :
-                  (lod_index <= 6'd23) ? mant_keep[22:0] :
-                  mant_round[24] ? mant_round[23:1] :
-                                    mant_round[22:0];
+// 5. 尾数舍入处理，当 lod_index > 23 时才需要舍入
+// mag_in[rshift-1'b1:0] 是需要舍入的部分
+assign mag_in_R_bit = (lod_index > 6'd23) ? mag_in[rshift - 1'b1] : 1'b0;
+assign mag_in_S_bit = (lod_index > 6'd23) ? 
+                    |(mag_in & ((32'h1 << (rshift - 1'b1)) - 32'h1)) : 1'b0;
+assign mag_in_round_inc = (lod_index > 6'd23) && mag_in_R_bit 
+                    && (mag_in_S_bit || mag_in_shift[0]);
+assign mag_in_round = {1'b0, mag_in_shift} + mag_in_round_inc;
+                    // {0, hidden bit + 23-bit fraction} + round_inc
+assign frac = in_is_zero ? 23'd0 :
+              // 如果是左移，直接取 mag_in_shift 的23位作为frac
+              (lod_index <= 6'd23) ? mag_in_shift[22:0] :
+              // 如果是右移
+              // 如果发生了进位，mag_in_round 的最高位会变为1，此时需要将 frac 其右移一位
+              mag_in_round[24] ? mag_in_round[23:1] : mag_in_round[22:0];
+assign exp = in_is_zero ? 8'd0 :
+             // 如果是左移，exp = exp_base
+             (lod_index <= 6'd23) ? exp_base :
+             // 如果是右移，
+             // 如果发生了进位，exp = exp_base + 1，否则 exp = exp_base
+             mag_in_round[24] ? (exp_base + 8'd1) :  exp_base;                                
 
-// 4. 拼接输出
-assign out_pre = in_is_zero ? 32'b0 : {s_in, exp_pre, frac_pre};
+// 6. 拼接输出
+assign out_pre = in_is_zero ? 32'b0 : {s_in, exp, frac};
 
 // [打拍]
 // out_pre -> out, in_is_zero -> out_is_zero

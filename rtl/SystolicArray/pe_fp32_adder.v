@@ -1,6 +1,7 @@
 /* 对于数据格式的说明：
 signed  exp       man
 31      30...23   22...0
+
 特殊情况：
   exponent  fraction  value
   0         zero      0
@@ -9,11 +10,11 @@ signed  exp       man
   255       zero      +-inf
   255       non-zero  NaN
 */
-module FP32_ADDER (
-    input       [31:0]  src1,
-    input       [31:0]  src2,
-    output reg  [31:0]  out
-    );
+module pe_fp32_adder (
+    input      [31:0]  a,
+    input      [31:0]  b,
+    output reg [31:0]  out
+);
     reg [66:0]  fraction_1;
     reg [66:0]  fraction_2;
     reg [66:0]  sum;
@@ -182,6 +183,8 @@ module FP32_ADDER (
             // out[22:0]  = fraction_Ans[64:42];
         end
     end
+
+
 ////////// PENC TASK ////////// 用4个PENC8拼接实现32bit优先编码
     task PENC8;
         //port declaration
