@@ -40,11 +40,11 @@
 1. 概述: 每个PE模块对输入 `i_a`, `i_b` 支持四种精度运算(fp32, fp16, int8, int4), 针对不同的精度做不同的运算
    - 针对 fp32: 
      - fp32 浮点数乘法 `pe_fp32_multiply.v`, 
-     - 累加器 `pe_fp32.v`
+     - 累加器 `pe_fp32_adder.v`
    - 针对 fp16: 
      - 取输入数据 `i_a`, `i_b` 低 16 位, 浮定转换 `pe_fp16_int16.v`, 定点数乘法(int32), 定浮转换 `pe_int32_fp32.v`
      - 取输入 partial sum `i_add` (fp32)
-     - 累加器 `pe_fp32.v`
+     - 累加器 `pe_fp32_adder.v`
    - 针对 int8: 
      - 取输入数据 `i_a`, `i_b` 低 8 位, 定点数乘法(int32), 
      - 累加器(int36), 位宽变换(int32) 
@@ -212,46 +212,52 @@
    7. 输出时序:
       - `out/out_is_zero/vld_out` 在 `vld_in` 有效后的下一个时钟输出
 
-#### fp32加法 `pe_fp32.v`
-1. 概述: 使用 IEEE 32-bit floating-point binary format 定义的32位浮点数 (`[31]` sign; `[30:23]` 8-bit exponent; `[22:0]` 23-bit fraction; bias = 127) 实现 FP32 加法。
+#### fp32加法 `pe_fp32_adder.v`
+1. 概述: 使用 IEEE 32-bit floating-point binary format 定义的32位浮点数 (`[31]` sign; `[30:23]` 8-bit exponent; `[22:0]` 23-bit fraction; bias = 127) 实现32位浮点数加法
 2. I/O interface:
-   - `input wire [31:0] a;` FP32 input operand 1
-     `input wire [31:0] b;` FP32 input operand 2
-   - `output reg [31:0] out;` FP32 addition result
+   - `input wire [31:0] a;` = $(-1)^{s_a} \times 1.{f_a}|_2 \times 2^{(e_a-127)}$
+     `input wire [31:0] b;` = $(-1)^{s_b} \times 1.{f_b}|_2 \times 2^{(e_b-127)}$
+   - `output reg [31:0] out;` = a + b
 3. 内部逻辑描述:
-   
+
    <center><img src="./README.md.pic/image-3.png" width="60%"></center>
 
    1. 输入处理:
-      - 把输入 `src1` 拆成符号 `sign_1 = src1[31]`、指数 `exponent_1 = src1[30:23]`、尾数 `src1[22:0]`
-      - 把输入 `src2` 拆成符号 `sign_2 = src2[31]`、指数 `exponent_2 = src2[30:23]`、尾数 `src2[22:0]`
-      - 扩展尾数到 `[66:0] fraction_1/fraction_2`，为对阶、加减和舍入保留额外精度
-   2. 特殊输入处理:
-      - 如果 exponent 为 0，按 zero/subnormal 路径处理，hidden bit 置 0
-      - 如果 exponent 不为 0，hidden bit 置 1，按 normal FP32 处理
-      - 如果 exponent 为 `8'hff` 且 fraction 为 0，标记为 `inf`
-      - 如果 exponent 为 `8'hff` 且 fraction 非 0，标记为 `NaN`
-   3. 对阶:
-      - 比较 `exponent_1` 和 `exponent_2`
-      - 指数较小的一方尾数右移，使两个操作数指数对齐
-      - `exponent_Ans` 取较大的指数
+      - 把 `a`、`b` 拆成符号 s、指数 e、尾数 f
+      - 尾数扩展成 `[66:0] extended_fraction`
+        - `[66]` 用于保存加法进位
+        - `[65]` 用于保存 hidden bit
+        - `[64:42]` 对应 FP32 23-bit fraction
+        - `[41:0]` 用于保留对阶和舍入过程中的额外精度
+   2. 特殊情况处理:
+      - e = 0: hidden bit 置 0，按 zero/subnormal 路径处理
+      - e != 0: hidden bit 置 1，按 normal FP32 路径处理
+      - e = 255 && f = 0: inf
+      - e = 255 && f != 0: NaN
+   3. 对阶处理:
+      - 比较两个输入的指数 `e_a` 和 `e_b`, 指数较小的一方尾数右移 `abs(e_a - e_b)` 位
+      - 输出指数 `e_out` 取两个输入指数中的较大值
    4. 尾数加减:
-      - 如果 `sign_1 == sign_2`，两个尾数相加，输出符号为相同符号
-      - 如果 `sign_1 != sign_2`，较大的尾数减较小的尾数，输出符号取幅值较大的操作数符号
+      - 如果 `s_a == s_b`，两个尾数相加，输出符号 `s_out = s_a`
+      - 如果 `s_a != s_b`，较大尾数减较小尾数，输出符号取幅值较大的操作数符号
    5. 规格化:
-      - 如果加法产生进位 `fraction_Ans[66] == 1`，尾数右移一位，指数加 1
-      - 如果结果尾数最高有效位不在 hidden bit 位置，使用 priority encoder 找到最高位 1，尾数左移并对应调整指数
+      - 如果尾数加法产生进位 `frac_out[66] == 1`，尾数右移一位，指数加 1
+      - 如果 `frac_out[65] == 0` 且结果非 0，使用 priority encoder 找到最高有效 1
+        - 根据最高有效 1 的位置左移尾数，同时调整 `e_out`
       - 如果尾数结果为 0，输出 zero
    6. 舍入处理:
-      - 使用 `guard_bit`、`round_bit`、`sticky_bit` 判断是否需要舍入
-      - 当前 RTL 中预留了 GRS 舍入逻辑，但实际加法语句仍需要进一步确认
+      - 使用 `Guard_bit = frac_out[41]`
+      - 使用 `Round_bit = frac_out[40]`
+      - 使用 `sticky_bit = |frac_out[39:0]`
+      - 当前 RTL 中保留了 GRS 舍入判断条件，但进位语句为 `frac_out = frac_out + 67'd0`，实际不会改变尾数
    7. 通路选择:
       ```verilog
-      if (nan_1 || nan_2 || inf - inf) out = NaN;
-      else if (inf_1 || inf_2 || exponent overflow) out = inf;
-      else if (fraction_Ans == 0) out = 32'h00000000;
-      else out = {sign_Ans, exponent_Ans, fraction_Ans[64:42]};
+      if (nan_1 || nan_2 || (inf_1 && inf_2 && (sign_1 ^ sign_2))) out = NaN;
+      else if (inf_1 || inf_2 || exponent overflow)                out = inf;
+      else if (fraction_Ans == 0)                                    out = 32'h00000000;
+      else                                                           out = {sign_Ans, exponent_Ans, fraction_Ans[64:42]};
       ```
    8. 输出时序:
-      - 当前 `FP32_ADDER` 是组合逻辑模块，没有 `clk/rst_n/vld_in/vld_out`
-      - `out` 随 `src1/src2` 组合变化
+      - 当前 `pe_fp32_adder` 是组合逻辑模块，没有 `clk/rst_n/vld_in/vld_out`
+      - `out` 随输入 `a/b` 组合变化
+4. 补充: 模块内部用 `PENC8/PENC16/PENC32` task 拼接实现 32-bit priority encoder，用于规格化阶段计算最高有效 1 的位置
