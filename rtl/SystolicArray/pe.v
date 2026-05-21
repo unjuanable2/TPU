@@ -1,305 +1,345 @@
 module pe
-  # (parameter DATA_IN    = 32, // 输入的数据都是32位，具体精度由外部来指示
+  # (parameter DATA_IN    = 32,
      parameter DATA_OUT   = 32,
      parameter MODE_WIDTH = 2)
   (
-	// Clock and Reset
-	input             clk,
-	input             rst_n,
-	// Cfg Signals 
-	input             tpu_en,    //
-	input      [31:0] data_in_b, // pre load
-	input      [31:0] cpt_mode, // 计算精度模式选择//00:INT4; 01:INT8; 10: FP16; 11:FP32
-	//Data In 
-	input             flag, // clear flag
-	input             data_in_vld,
-	input      [31:0] data_in_a,
-	input      [31:0] data_in_add,
-	//Data Out
-	output reg        data_out_vld,
-	output reg [31:0] data_out,
-    output reg [31:0] out_a,
-	output reg   	  out_a_vld
-   );
-     
-	
-reg  [31:0]  fp32_out;
-reg 		 fp32_out_vld;
-wire [31:0]  fp16_out;
-wire 		 fp16_out_vld;
-wire [31:0]  int8_out;
-wire 		 int8_out_vld;
-wire [31:0]  int4_out;
-wire		 int4_out_vld;
+    // Clock and Reset
+    input wire clk,
+    input wire rst_n,
+    // Cfg Signals
+    input wire tpu_en, // TPU enable signal configured by CPU through AHB bus
+    input wire [DATA_IN-1:0] data_in_b, // B data configured by CPU through AHB bus
+    input wire [31:0] cpt_mode, // 00: INT4; 01: INT8; 10: FP16; 11: FP32
+    // Data In
+    input wire flag, // Flag signal to indicate the end of a computation, 
+                     // used to reset the internal state of the PE
+    input wire data_in_vld, // Data valid signal from the left PE
+    input wire [DATA_IN-1:0]  data_in_a, // A data from the left PE 
+    input wire [DATA_OUT-1:0] data_in_add, // Partial sum from the above PE 
 
-wire [31:0]  fp32_data_in_a;
-wire [31:0]  fp16_data_in_a;
-wire [31:0]  int8_data_in_a;
-wire [31:0]  int4_data_in_a;
-
-wire [31:0]  fp32_data_in_add;
-wire [31:0]  fp16_data_in_add;
-wire [31:0]  int8_data_in_add;
-wire [31:0]  int4_data_in_add;
-
-wire [31:0]  fp32_data_in_vld;
-wire [31:0]  fp16_data_in_vld;
-wire [31:0]  int8_data_in_vld;
-wire [31:0]  int4_data_in_vld;
-
-wire [31:0] fp32_multiply_out;
-wire 		fp32_muti_vld;
-
-wire [15:0] fp2fix_data_out_a;
-wire 		fp2fix_out_vld;
-wire [15:0] fix_b;
-wire [31:0] fp16_muti_out;
-reg  [33:0] fp16_sum_out;
-reg  		fp16_sum_vld;
-wire [31:0] fp16_sum_out_clip;
-
-reg  [31:0] int8_sum_out;
-reg  	    int8_sum_vld;
-
-reg  [31:0] int4_sum_out;
-reg  	    int4_sum_vld;
-
-// 当前状态为start、输入数据有效、复位信号无效且把输入数据指定为某一个精度后，通过外部的配置选择一个模式进行计算
-// ========================= input Select ============================= // 
-wire enable_FP32;
-wire enable_FP16;
-wire enable_INT8;
-wire enable_INT4;
-
-assign enable_FP32 = tpu_en && (cpt_mode == 2'b11);
-assign enable_FP16 = tpu_en && (cpt_mode == 2'b10);
-assign enable_INT8 = tpu_en && (cpt_mode == 2'b01);
-assign enable_INT4 = tpu_en && (cpt_mode == 2'b00);
-
-assign fp32_data_in_a = (cpt_mode == 2'b11) ? data_in_a : 32'd0;
-assign fp16_data_in_a = (cpt_mode == 2'b10) ? data_in_a : 32'd0;
-assign int8_data_in_a = (cpt_mode == 2'b01) ? data_in_a : 32'd0;
-assign int4_data_in_a = (cpt_mode == 2'b00) ? data_in_a : 32'd0;
-
-assign fp32_data_in_add = (cpt_mode == 2'b11) ? data_in_add : 32'd0;
-assign fp16_data_in_add = (cpt_mode == 2'b10) ? data_in_add : 32'd0;
-assign int8_data_in_add = (cpt_mode == 2'b01) ? data_in_add : 32'd0;
-assign int4_data_in_add = (cpt_mode == 2'b00) ? data_in_add : 32'd0;
-
-assign fp32_data_in_vld = (cpt_mode == 2'b11) ? data_in_vld : 1'b0;
-assign fp16_data_in_vld = (cpt_mode == 2'b10) ? data_in_vld : 1'b0;
-assign int8_data_in_vld = (cpt_mode == 2'b01) ? data_in_vld : 1'b0;
-assign int4_data_in_vld = (cpt_mode == 2'b00) ? data_in_vld : 1'b0;
-
-// ========================= FP32 PATH ============================= // 
-pe_fp32_multiply U_FP32_MUTI(
-	.clk                 (clk               ),
-	.rst_n               (rst_n             ),
-	.cpt_en              (tpu_en            ), // tpu_en
-	.vld_in              (fp32_data_in_vld  ), // 输入数据有效信号
-	.a           (fp32_data_in_a    ), // 输入的第一个32位数据
-	.b           (data_in_b         ), // 输入的第二个32位数据
-	.out                 (fp32_multiply_out ), // 输出的乘积结果，32位
-	.vld_out             (fp32_muti_vld     ), // 输出数据有效信号
-	.out_is_zero         (                  ), // 输出结果是否为零
-	.out_is_inf          (                  ), // 输出结果是否为正无穷
-	.out_is_nan          (                  ), // 输出结果是否为非数
-	.out_is_of           (                  ), // 输出结果是否发生溢出
-	.out_is_uf           (                  ) // 输出结果是否发生下溢
-	);
-
-FP32_ADDER U_FP32_ADDER(
-	.src1                (fp32_multiply_out ), // 乘法的输出结果作为加法的第一个输入
-	.src2                (fp32_data_in_add  ), // 
-	.out                 (fp32adder_out     )  // 加法的输出结果，32位
-	);
-
-always @ (posedge clk or negedge rst_n) begin
-	if(!rst_n) begin
-		fp32_out <= 32'd0;
-		fp32_out_vld <= 1'b0;
-	end
-	else if (enable_FP32==1'b0)begin
-		fp32_out <= 32'd0;
-		fp32_out_vld <= 1'b0;
-	end
-	else if (flag==1'b1) begin
-		fp32_out <= 32'd0;
-		fp32_out_vld <= 1'b0;
-	end
-	else if (enable_FP32==1'b1 && flag==1'b0 && fp32_muti_vld==1'b1)  begin
-		fp32_out     <= fp32adder_out; 
-		fp32_out_vld <= fp32_muti_vld; // 迭代过程中输出数据有效
-	end
-end
-
-
-
-// ========================= FP16 PATH ============================= // 
-FP2FIX  U_FP2FIX_A (
-	.clk                 (clk               ),
-	.rst_n               (rst_n             ),
-	.en                  (tpu_en       ),
-	.vld_in              (fp16_data_in_vld  ),
-	.data_in             (fp16_data_in_a[15:0]), // 输入的第一个32位数据，虽然是32位，但只有低16位有效，高位悬空
-	.data_out            (fp2fix_data_out_a ), // 输出的结果，16位
-	.overflow            (                  ), // 输出结果是否发生溢出
-	.underflow           (                  ), // 输出结果是否发生下溢
-	.vld_out             (fp2fix_out_vld)  // 输出数据有效信号
+    // Data Out
+    output reg data_out_vld,
+    output reg [DATA_OUT-1:0] data_out,
+    output reg out_a_vld,
+    output reg [DATA_IN-1:0] out_a
 );
-FP2FIX  U_FP2FIX_B (
-	.clk                 (clk               ),
-	.rst_n               (rst_n             ),
-	.en                  (tpu_en      		 ),
-	.vld_in              (1'b1 			 ),
-	.data_in             (data_in_b[15:0]   ), // 输入的第一个32位数据，虽然是32位，但只有低16位有效，高位悬空
-	.data_out            (fix_b             ), // 输出的结果，16位
-	.overflow            (                  ), // 输出结果是否发生溢出
-	.underflow           (                  ), // 输出结果是否发生下溢
-	.vld_out             (				     )  // 输出数据有效信号
+
+localparam MODE_INT4 = 2'b00;
+localparam MODE_INT8 = 2'b01;
+localparam MODE_FP16 = 2'b10;
+localparam MODE_FP32 = 2'b11;
+
+// ============================================================================
+// Mode and enable signals
+// ============================================================================
+wire [1:0] mode;
+wire       enable_fp32;
+wire       enable_fp16;
+wire       enable_int8;
+wire       enable_int4;
+assign mode        = cpt_mode[1:0];
+assign enable_fp32 = tpu_en && (mode == MODE_FP32);
+assign enable_fp16 = tpu_en && (mode == MODE_FP16);
+assign enable_int8 = tpu_en && (mode == MODE_INT8);
+assign enable_int4 = tpu_en && (mode == MODE_INT4);
+
+// ============================================================================
+// FP32 path: FP32 multiply -> FP32 add
+// ============================================================================
+wire        fp32_mul_vld;
+wire [31:0] fp32_mul_out;
+pe_fp32_multiply U_FP32_MUL (
+    // Input
+    .clk         (clk),
+    .rst_n       (rst_n),
+    .vld_in      (data_in_vld && enable_fp32),
+    .cpt_en      (enable_fp32),
+    .a           (data_in_a),
+    .b           (data_in_b),
+    // Output
+    .vld_out     (fp32_mul_vld),
+    .out         (fp32_mul_out),
+    .out_is_zero (),
+    .out_is_inf  (),
+    .out_is_nan  (),
+    .out_is_of   (),
+    .out_is_uf   ()
 );
-										 
-assign fp16_muti_out = $singed(fp2fix_data_out_a) * $singed(fix_b);
 
-always @ (posedge clk or negedge rst_n) begin
-	if(!rst_n)begin
-		fp16_sum_out <= 36'd0;
-	end
-	else if (enable_FP16==1'b0)begin
-		fp16_sum_out <= 36'd0;
-	end
-	else if (flag==1'b1) begin
-		fp16_sum_out <= 36'd0;
-	end
-	else if (enable_FP16==1'b1 && flag==1'b0 && fp2fix_out_vld)  begin
-		fp16_sum_out <= $singed(fp16_muti_out) + $singed(fp16_data_in_add); 
-	end
-end
+// 因为FP32的乘法器有3个周期的延迟，所以需要将加数延迟3个周期，以便与乘法结果对齐
+reg  [31:0] fp32_addend_d1;
+reg  [31:0] fp32_addend_d2;
+reg  [31:0] fp32_addend_d3;
 always @(posedge clk or negedge rst_n) begin
-	if(!rst_n) begin
-		fp16_sum_vld <= 1'b0;
-	end
-	else if (enable_FP16==1'b0)begin
-		fp16_sum_vld <= 1'b0;
-	end
-	else begin
-		fp16_sum_vld <= fp2fix_out_vld;
-	end
+    if(!rst_n) begin
+        fp32_addend_d1 <= 32'd0;
+        fp32_addend_d2 <= 32'd0;
+        fp32_addend_d3 <= 32'd0;
+    end else if(!enable_fp32 || flag) begin
+        fp32_addend_d1 <= 32'd0;
+        fp32_addend_d2 <= 32'd0;
+        fp32_addend_d3 <= 32'd0;
+    end else begin // enable_fp32 && !flag
+        if(data_in_vld) begin
+            fp32_addend_d1 <= data_in_add;
+        end
+        fp32_addend_d2 <= fp32_addend_d1;
+        fp32_addend_d3 <= fp32_addend_d2;
+    end
 end
-assign  fp16_sum_out_clip = fp16_sum_out[33:2];
 
-	pe_int32_fp32 U_FIX2FP (
-		.clk                 (clk               ),
-		.rst_n               (rst_n             ),
-		.cpt_en              (tpu_en            ),
-		.vld_in              (fp16_sum_vld      ),
-		.in                  (fp16_sum_out_clip ), // 
-		.vld_out             (fp16_out_vld 	   ), // 输出数据有效信号
-		.out                 (fp16_out 		   ), // 输出的结果，32位
-		.out_is_zero         (                  )
-	);
-	
-	
-	
-// ========================= INT8 PATH ============================= // 
-assign int8_muti_out = $singed(int8_data_in_a) * $singed(data_in_b);
+// FP32 adder
+wire [31:0] fp32_add_out;
+pe_fp32_adder U_FP32_ADD (
+    // Input
+    .clk   (clk),
+    .rst_n (rst_n),
+    .a     (fp32_mul_out),
+    .b     (fp32_addend_d3),
+    // Output
+    .out   (fp32_add_out)
+);
 
-always @ (posedge clk or negedge rst_n) begin
-	if(!rst_n)begin
-		int8_sum_out <= 32'd0;
-	end
-	else if (enable_INT8==1'b0)begin
-		int8_sum_out <= 32'd0;
-	end
-	else if (flag==1'b1) begin
-		int8_sum_out <= 32'd0;
-	end
-	else if (enable_INT8==1'b1 && flag==1'b0 && int8_data_in_vld)  begin
-		int8_sum_out <= $singed(int8_muti_out) + $singed(int8_data_in_add); 
-	end
-end
-  
+// 输出 fp32_out
+wire [31:0] fp32_out;
+assign fp32_out = fp32_add_out;
+
+// 输出 fp32_out_vld
+// 因为FP32的加法器有1个周期的延迟，所以fp32_out_vld需要延迟1个周期
+reg fp32_out_vld;
 always @(posedge clk or negedge rst_n) begin
-	if(!rst_n) begin
-		int8_sum_vld <= 1'b0;
-	end
-	else if (enable_INT8==1'b0)begin
-		int8_sum_vld <= 1'b0;
-	end
-	else begin
-		int8_sum_vld <= int8_data_in_vld;
-	end
+    if(!rst_n) begin
+        fp32_out_vld <= 1'b0;
+    end else if(!enable_fp32 || flag) begin
+        fp32_out_vld <= 1'b0;
+    end else begin
+        fp32_out_vld <= fp32_mul_vld;
+    end
 end
 
-assign int8_out = int8_sum_out;
-assign int8_out_vld = int8_sum_vld;
+// ============================================================================
+// FP16 path: FP16->INT16 -> INT32 product -> INT32->FP32 -> FP32 add
+// ============================================================================
+// 取输入数据 data_in_a, data_in_b 低 16 位, 浮定转换为 signed int16
+wire fp16_a_vld, fp16_b_vld;
+wire [15:0] fp16_a_int16;
+wire [15:0] fp16_b_int16;
+pe_fp16_int16 U_FP16_A_TO_INT16 (
+    // Input
+    .clk       (clk),
+    .rst_n     (rst_n),
+    .vld_in    (data_in_vld && enable_fp16),
+    .cpt_en    (enable_fp16),
+    .in        (data_in_a[15:0]),
+    // Output
+    .vld_out   (fp16_a_vld),
+    .out       (fp16_a_int16),
+    .out_is_of (),
+    .out_is_uf ()
+);
+pe_fp16_int16 U_FP16_B_TO_INT16 (
+    // Input
+    .clk       (clk),
+    .rst_n     (rst_n),
+    .vld_in    (data_in_vld && enable_fp16),
+    .cpt_en    (enable_fp16),
+    .in        (data_in_b[15:0]),
+    // Output
+    .vld_out   (fp16_b_vld),
+    .out       (fp16_b_int16),
+    .out_is_of (),
+    .out_is_uf ()
+);
 
-// ========================= INT4 PATH ============================= // 
-assign int4_muti_out = $singed(int4_data_in_a) * $singed(data_in_b);
+// int16 定点乘法得到 int32 product
+wire fp16_product_vld;
+wire signed [31:0] fp16_product_int;
+assign fp16_product_vld = fp16_a_vld && fp16_b_vld;
+assign fp16_product_int = $signed(fp16_a_int16) * $signed(fp16_b_int16);
 
-always @ (posedge clk or negedge rst_n) begin
-	if(!rst_n)begin
-		int4_sum_out <= 32'd0;
-	end
-	else if (enable_INT4==1'b0)begin
-		int4_sum_out <= 32'd0;
-	end
-	else if (flag==1'b1) begin
-		int4_sum_out <= 32'd0;
-	end
-	else if (enable_INT4==1'b1 && flag==1'b0 && int4_data_in_vld)  begin
-		int4_sum_out <= $singed(int4_muti_out) + $singed(int4_data_in_add); 
-	end
-end
-  
+// int32 转换为 fp32
+wire fp16_product_fp32_vld;
+wire [31:0] fp16_product_fp32;
+pe_int32_fp32 U_FP16_PRODUCT_TO_FP32 (
+    // Input
+    .clk         (clk),
+    .rst_n       (rst_n),
+    .vld_in      (fp16_product_vld),
+    .cpt_en      (enable_fp16),
+    .in          (fp16_product_int),
+    // Output
+    .vld_out     (fp16_product_fp32_vld),
+    .out         (fp16_product_fp32),
+    .out_is_zero ()
+);
+
+// 因为 pe_fp16_int16 有 1 个周期的延迟，pe_int32_fp32 有 2 个周期的延迟，
+// 总共有3个周期的延迟，所以需要将加数延迟3个周期，以便与乘法结果对齐。
+reg  [31:0] fp16_addend_d1;
+reg  [31:0] fp16_addend_d2;
+reg  [31:0] fp16_addend_d3;
 always @(posedge clk or negedge rst_n) begin
-	if(!rst_n) begin
-		int4_sum_vld <= 1'b0;
-	end
-	else if (enable_INT4==1'b0)begin
-		int4_sum_vld <= 1'b0;
-	end
-	else begin
-		int4_sum_vld <= int4_data_in_vld;
-	end
+    if(!rst_n) begin
+        fp16_addend_d1 <= 32'd0;
+        fp16_addend_d2 <= 32'd0;
+        fp16_addend_d3 <= 32'd0;
+    end else if(!enable_fp16 || flag) begin
+        fp16_addend_d1 <= 32'd0;
+        fp16_addend_d2 <= 32'd0;
+        fp16_addend_d3 <= 32'd0;
+    end else begin
+        if(data_in_vld) begin
+            fp16_addend_d1 <= data_in_add;
+        end
+        fp16_addend_d2 <= fp16_addend_d1;
+        fp16_addend_d3 <= fp16_addend_d2;
+    end
 end
 
-assign int4_out = int4_sum_out;
-assign int4_out_vld = int4_sum_vld;
+// FP32 adder
+wire [31:0] fp16_add_out;
+pe_fp32_adder U_FP16_FP32_ADD (
+    // Input
+    .clk   (clk),
+    .rst_n (rst_n),
+    .a     (fp16_product_fp32),
+    .b     (fp16_addend_d3),
+    // Output
+    .out   (fp16_add_out)
+);
 
-// ========================= Output Select ========================= //
-always@(*)begin
-	case(cpt_mode)
-		00: data_out_vld = int4_out_vld;
-		01: data_out_vld = int8_out_vld;
-		10: data_out_vld = fp16_out_vld;
-		11: data_out_vld = fp32_out_vld;
-		default: data_out_vld = int4_out_vld;
-	endcase
+// 输出 fp16_out
+wire [31:0] fp16_out;
+assign fp16_out = fp16_add_out;
+
+// 输出 fp16_out_vld
+reg fp16_out_vld;
+always @(posedge clk or negedge rst_n) begin
+    if(!rst_n) begin
+        fp16_out_vld <= 1'b0;
+    end else if(!enable_fp16 || flag) begin
+        fp16_out_vld <= 1'b0;
+    end else begin
+        fp16_out_vld <= fp16_product_fp32_vld;
+    end
 end
 
-always@(*)begin
-	case(cpt_mode)
-		00: data_out = int4_out;
-		01: data_out = int8_out;
-		10: data_out = fp16_out;
-		11: data_out = fp32_out;
-		default: data_out = int4_out;
-	endcase
+// ============================================================================
+// INT8 path: signed INT8 product + signed INT32 partial sum
+// ============================================================================
+// 取输入数据 data_in_a, data_in_b 低 8 位, 转换为 signed int8
+wire signed [7:0] int8_a;
+wire signed [7:0] int8_b;
+assign int8_a = data_in_a[7:0];
+assign int8_b = data_in_b[7:0];
+
+// INT8 定点乘法得到 INT16 product
+wire signed [15:0] int8_product;
+assign int8_product = int8_a * int8_b;
+
+// INT16 product 转换为 INT32, 并与 data_in_add 相加得到 INT32 sum
+wire signed [31:0] int8_sum;
+assign int8_sum = {{16{int8_product[15]}}, int8_product} + $signed(data_in_add);
+
+// 输出 int8_out，和 int8_out_vld
+reg int8_out_vld;
+reg [31:0] int8_out;
+always @(posedge clk or negedge rst_n) begin
+    if(!rst_n) begin
+        int8_out_vld <= 1'b0;
+        int8_out     <= 32'd0;
+    end else if(!enable_int8 || flag) begin
+        int8_out_vld <= 1'b0;
+        int8_out     <= 32'd0;
+    end else begin
+        int8_out_vld <= data_in_vld;
+        if(data_in_vld) begin
+            int8_out <= int8_sum;
+        end
+    end
 end
 
-always@(posedge clk or negedge rst_n) begin
-	if(!rst_n) begin
-		out_a <= 32'd0;
-		out_a_vld <= 1'b0;
-	end
-	else if (tpu_en== 1'b0)begin
-		out_a <= 32'd0;
-		out_a_vld <= 1'b0;
-	end
-	else if(data_in_vld==1'b1) begin
-		out_a <= data_in_a;
-		out_a_vld <= data_in_vld;
-	end
+// ============================================================================
+// INT4 path: signed INT4 product + signed INT32 partial sum
+// ============================================================================
+// 将输入数据 data_in_a, data_in_b 低 4 位转换为 signed int4
+wire signed [3:0] int4_a;
+wire signed [3:0] int4_b;
+assign int4_a = data_in_a[3:0];
+assign int4_b = data_in_b[3:0];
+
+// INT4 定点乘法得到 INT8 product
+wire signed [7:0] int4_product;
+assign int4_product = int4_a * int4_b;
+
+// INT8 product 转换为 INT32, 并与 data_in_add 相加得到 INT32 sum
+wire signed [31:0] int4_sum;
+assign int4_sum = {{24{int4_product[7]}}, int4_product} + $signed(data_in_add);
+
+// 输出 int4_out，和 int4_out_vld
+reg int4_out_vld;
+reg [31:0] int4_out;
+always @(posedge clk or negedge rst_n) begin
+    if(!rst_n) begin
+        int4_out_vld <= 1'b0;
+        int4_out     <= 32'd0;
+    end else if(!enable_int4 || flag) begin
+        int4_out_vld <= 1'b0;
+        int4_out     <= 32'd0;
+    end else begin
+        int4_out_vld <= data_in_vld;
+        if(data_in_vld) begin
+            int4_out <= int4_sum;
+        end
+    end
 end
+
+// ============================================================================
+// Output select
+// ============================================================================
+always @(*) begin
+    data_out_vld = 1'b0;
+    data_out     = {DATA_OUT{1'b0}};
+
+    case(mode)
+        MODE_FP32: begin // 总延迟为 3+1 = 4 个周期
+            data_out_vld = fp32_out_vld;
+            data_out     = fp32_out;
+        end
+        MODE_FP16: begin // 总延迟为 3+1 = 4 个周期
+            data_out_vld = fp16_out_vld;
+            data_out     = fp16_out;
+        end
+        MODE_INT8: begin // 总延迟为 1 个周期
+            data_out_vld = int8_out_vld;
+            data_out     = int8_out;
+        end
+        MODE_INT4: begin // 总延迟为 1 个周期
+            data_out_vld = int4_out_vld;
+            data_out     = int4_out;
+        end
+        default: begin
+            data_out_vld = 1'b0;
+            data_out     = {DATA_OUT{1'b0}};
+        end
+    endcase
+end
+
+// Pass A data to the next PE belowA.
+// out_a 和 out_a_vld 总延迟为 1 个周期
+always @(posedge clk or negedge rst_n) begin
+    if(!rst_n) begin
+        out_a     <= {DATA_IN{1'b0}};
+        out_a_vld <= 1'b0;
+    end else if(!tpu_en || flag) begin
+        out_a     <= {DATA_IN{1'b0}};
+        out_a_vld <= 1'b0;
+    end else begin
+        out_a_vld <= data_in_vld;
+        if(data_in_vld) begin
+            out_a <= data_in_a;
+        end
+    end
+end
+
 endmodule

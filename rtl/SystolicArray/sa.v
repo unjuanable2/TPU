@@ -30,7 +30,7 @@ module SA_TOP #(
 
     // Compute cycles = array fill/flush cycles + PE internal latency.
     localparam integer BASE_CYCLES       = ROW + COL - 1;
-    localparam integer MAX_PE_LATENCY    = 3; // max{FP32=1, INT4/8=2, FP16=3}
+    localparam integer MAX_PE_LATENCY    = 3; // max{INT4/8=1, FP32=3, FP16=3}
     localparam integer MATMUL_CYCLES_MAX = BASE_CYCLES + MAX_PE_LATENCY;
     localparam integer CNT_W             = (MATMUL_CYCLES_MAX <= 1) ? 1 :
                                            $clog2(MATMUL_CYCLES_MAX);
@@ -47,9 +47,9 @@ module SA_TOP #(
     wire [ROW*COL-1:0]        pe_psum_vld_bus;
     wire [COL-1:0]            bottom_vld;
 
-    assign pe_lat_by_mode = (cpt_mode == 2'b11) ? 3'd1 :
+    assign pe_lat_by_mode = (cpt_mode == 2'b11) ? 3'd3 :
                             (cpt_mode == 2'b10) ? 3'd3 :
-                                                   3'd2;
+                                                   3'd1;
     assign matmul_cycles = BASE_CYCLES + pe_lat_by_mode;
 
     always @(posedge clk or negedge rst_n) begin

@@ -1,5 +1,7 @@
 # TPU
+
 <img src="./README.md.pic/TopView.png" width="100%">
+
 
 ├── 1_rtl
 │   ├── AHB
@@ -37,26 +39,46 @@
    - `output wire [31:0] i_AB [15][15];`
 
 ### multi-precision processing unit `pe.v`
-1. 概述: 每个PE模块对输入 `i_a`, `i_b` 支持四种精度运算(fp32, fp16, int8, int4), 针对不同的精度做不同的运算
+1. 概述: 每个PE模块对输入 `data_in_a`, `data_in_b` 支持四种精度运算(fp32, fp16, int8, int4), 根据 `cpt_mode` 选择不同计算通路，最终输出 32-bit partial sum
    - 针对 fp32: 
-     - fp32 浮点数乘法 `pe_fp32_multiply.v`, 
-     - 累加器 `pe_fp32_adder.v`
+     - fp32 浮点数乘法 `pe_fp32_multiply.v`
+     - delay 对齐输入 partial sum `data_in_add`
+     - fp32 浮点数加法/累加 `pe_fp32_adder.v`
+     - 输出 FP32
    - 针对 fp16: 
-     - 取输入数据 `i_a`, `i_b` 低 16 位, 浮定转换 `pe_fp16_int16.v`, 定点数乘法(int32), 定浮转换 `pe_int32_fp32.v`
-     - 取输入 partial sum `i_add` (fp32)
-     - 累加器 `pe_fp32_adder.v`
+     - 取输入数据 `data_in_a`, `data_in_b` 低 16 位, 浮定转换 `pe_fp16_int16.v`
+     - int16 定点乘法得到 int32 product, 定浮转换 `pe_int32_fp32.v` 将 product 转成 FP32
+     - delay 对齐输入 partial sum `data_in_add`
+     - fp32 浮点数加法/累加 `pe_fp32_adder.v`
+     - 输出 FP32
    - 针对 int8: 
-     - 取输入数据 `i_a`, `i_b` 低 8 位, 定点数乘法(int32), 
-     - 累加器(int36), 位宽变换(int32) 
+     - 取输入数据 `data_in_a`, `data_in_b` 低 8 位
+     - signed int8 定点乘法
+     - 与 signed int32 partial sum `data_in_add` 累加
+     - 输出 int32
    - 针对 int4: 
-     - 取输入数据 `i_a`, `i_b` 低 4 位, 定点数乘法(int32), 
-     - 累加器(int36), 位宽变换(int32) 
+     - 取输入数据 `data_in_a`, `data_in_b` 低 4 位
+     - signed int4 定点乘法
+     - 与 signed int32 partial sum `data_in_add` 累加
+     - 输出 int32
 2. I/O interface:
-   - `input wire [31:0] i_a;`
-   - `input wire [31:0] i_b;`
-   - `output wire [31:0] o_a;`: 将 `i_a` 传给右边和下边的PE module in the systolic array
-   - `output wire [31:0] o_b;`: 将 `i_b` 传给右边和下边的PE module in the systolic array
-   - `output wire [31:0] o_pe_current_value;`: 目前计算累加得到的值，用于脉动阵列下一次"脉动"后的计算累加
+   - `input wire clk;`
+     `input wire rst_n;`
+     `input wire tpu_en;`
+     `input wire [31:0] data_in_b;`
+     `input wire [31:0] cpt_mode;`
+     `input wire flag;`
+     `input wire data_in_vld;`
+     `input wire [31:0] data_in_a;`
+     `input wire [31:0] data_in_add;`
+   - `output reg data_out_vld;`
+     `output reg [31:0] data_out;`: 当前 PE 输出 partial sum
+     `output reg [31:0] out_a;`: 将 `data_in_a` 传给右边的 PE module in the systolic array
+     `output reg out_a_vld;`
+3. 输出 latency:
+   - int4/int8: 1 cycle
+   - fp32: 3 cycles
+   - fp16: 3 cycles
 
 
 #### fp32乘法 `pe_fp32_multiply.v`
@@ -215,7 +237,9 @@
 #### fp32加法 `pe_fp32_adder.v`
 1. 概述: 使用 IEEE 32-bit floating-point binary format 定义的32位浮点数 (`[31]` sign; `[30:23]` 8-bit exponent; `[22:0]` 23-bit fraction; bias = 127) 实现32位浮点数加法
 2. I/O interface:
-   - `input wire [31:0] a;` = $(-1)^{s_a} \times 1.{f_a}|_2 \times 2^{(e_a-127)}$
+   - `input wire clk;`
+     `input wire rst_n;`
+     `input wire [31:0] a;` = $(-1)^{s_a} \times 1.{f_a}|_2 \times 2^{(e_a-127)}$
      `input wire [31:0] b;` = $(-1)^{s_b} \times 1.{f_b}|_2 \times 2^{(e_b-127)}$
    - `output reg [31:0] out;` = a + b
 3. 内部逻辑描述:
@@ -224,40 +248,36 @@
 
    1. 输入处理:
       - 把 `a`、`b` 拆成符号 s、指数 e、尾数 f
-      - 尾数扩展成 `[66:0] extended_fraction`
+      - 尾数扩展成 `[66:0] extended_f`
         - `[66]` 用于保存加法进位
         - `[65]` 用于保存 hidden bit
         - `[64:42]` 对应 FP32 23-bit fraction
         - `[41:0]` 用于保留对阶和舍入过程中的额外精度
-   2. 特殊情况处理:
-      - e = 0: hidden bit 置 0，按 zero/subnormal 路径处理
-      - e != 0: hidden bit 置 1，按 normal FP32 路径处理
-      - e = 255 && f = 0: inf
-      - e = 255 && f != 0: NaN
-   3. 对阶处理:
+      - 特殊情况处理:
+        - e = 0: hidden bit 置 0，按 zero/subnormal 路径处理
+        - e != 0: hidden bit 置 1，按 normal FP32 路径处理
+        - e = 255 && f = 0: inf
+        - e = 255 && f != 0: NaN
+   2. 对阶处理:
       - 比较两个输入的指数 `e_a` 和 `e_b`, 指数较小的一方尾数右移 `abs(e_a - e_b)` 位
-      - 输出指数 `e_out` 取两个输入指数中的较大值
-   4. 尾数加减:
-      - 如果 `s_a == s_b`，两个尾数相加，输出符号 `s_out = s_a`
-      - 如果 `s_a != s_b`，较大尾数减较小尾数，输出符号取幅值较大的操作数符号
-   5. 规格化:
-      - 如果尾数加法产生进位 `frac_out[66] == 1`，尾数右移一位，指数加 1
-      - 如果 `frac_out[65] == 0` 且结果非 0，使用 priority encoder 找到最高有效 1
+      - 输出指数 `[8:0] e_out` 取两个输入指数中的较大值，用于保留 overflow/underflow 判断空间
+   3. 尾数加减:
+      - 如果 `s_a == s_b`，两个尾数相加得到 `[66:0] f_out`，输出符号 `s_out = s_a`
+      - 如果 `s_a != s_b`，较大尾数减较小尾数得到 `[66:0] f_out`，输出符号取幅值较大的操作数符号
+   4. 规格化:
+      - 如果尾数加法产生进位 `f_out[66] == 1`，尾数右移一位，指数加 1
+      - 如果 `f_out[65] == 0` 且结果非 0，使用 priority encoder 找到最高有效 1
         - 根据最高有效 1 的位置左移尾数，同时调整 `e_out`
       - 如果尾数结果为 0，输出 zero
-   6. 舍入处理:
-      - 使用 `Guard_bit = frac_out[41]`
-      - 使用 `Round_bit = frac_out[40]`
-      - 使用 `sticky_bit = |frac_out[39:0]`
-      - 当前 RTL 中保留了 GRS 舍入判断条件，但进位语句为 `frac_out = frac_out + 67'd0`，实际不会改变尾数
-   7. 通路选择:
+   5. 舍入处理: 根据 `G_bit  = f_out_normalized[41];` `S_bit = |f_out_normalized[40:0];` 进行 RNE 舍入处理。
+      - 舍入后再处理：检查是否进位 
+   6. 通路选择:
       ```verilog
-      if (nan_1 || nan_2 || (inf_1 && inf_2 && (sign_1 ^ sign_2))) out = NaN;
-      else if (inf_1 || inf_2 || exponent overflow)                out = inf;
-      else if (fraction_Ans == 0)                                    out = 32'h00000000;
-      else                                                           out = {sign_Ans, exponent_Ans, fraction_Ans[64:42]};
+      if (a_is_nan || b_is_nan || (a_is_inf && b_is_inf && (s_a ^ s_b))) out_comb = NaN;
+      else if (a_is_inf || b_is_inf || exponent overflow)                 out_comb = inf;
+      else if (f_out_round == 0 || exponent underflow)                    out_comb = 32'h00000000;
+      else                                                                out_comb = {s_out, e_out_round[7:0], f_out_round[64:42]};
       ```
-   8. 输出时序:
-      - 当前 `pe_fp32_adder` 是组合逻辑模块，没有 `clk/rst_n/vld_in/vld_out`
-      - `out` 随输入 `a/b` 组合变化
-4. 补充: 模块内部用 `PENC8/PENC16/PENC32` task 拼接实现 32-bit priority encoder，用于规格化阶段计算最高有效 1 的位置
+   7. 输出时序:
+      - `out_comb` 是组合逻辑计算结果
+      - `out` 在 `posedge clk` 打一拍输出，`rst_n` 拉低时清 0
