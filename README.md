@@ -18,8 +18,6 @@ CPU 写 `RegisterMap` 中的控制和配置寄存器来设置 TPU 的使能、�
 
 最后，控制模块还会维护当前状态、计数信息、完成标志和错误状态。这些状态会返回到 `RegisterMap`，CPU 再通过 AHB 读取对应的状态寄存器，判断本轮计算是否完成，以及是否出现异常。
 
-一句话概括：CPU 通过 AHB 访问 `RegisterMap` 来配置和启动 TPU，并通过它读取状态；A 数据通过 AXI-Stream 输入并进入 FIFO，控制模块调度数据进入 4x4 脉动阵列，阵列使用预加载的 B 权重完成乘加计算，结果再通过输出 FIFO 和 AXI-Stream master 返回。
-
 
 ├── 1_rtl
 │   ├── AHB
@@ -48,11 +46,7 @@ CPU 写 `RegisterMap` 中的控制和配置寄存器来设置 TPU 的使能、�
     ├── cdc.prj
     ├── lint.prj
     └── tpu_top.sgdc
-
-
-CPU 通过 AHB 配置控制寄存器和 B 权重，然后 start；AXI-Stream 输入 A 数据，进入输入 FIFO；
-控制模块按 FIFO 状态驱动读取，并通过数据转换模块做行间延迟；然后 A 数据进入 4x4 脉动阵列，与寄存器预加载的 B 权重做乘加；结果写入输出 FIFO，再通过 AXI-Stream master 输出；
-最后 CPU 通过 AHB 读状态寄存器确认计算完成。    
+   
 
 ## systolic array `sa.v`
 1. 概述: 实例化 `ROW*COL` 个 PE modules `pe.v` 形成一个权重固定型脉动阵列 weight-stationary systolic array, 用于执行矩阵乘法 `C = A * B`
