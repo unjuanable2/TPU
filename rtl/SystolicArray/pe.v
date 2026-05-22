@@ -12,7 +12,7 @@ module pe
     input wire [31:0] cpt_mode, // 00: INT4; 01: INT8; 10: FP16; 11: FP32
     // Data In
     input wire flag, // Flag signal to indicate the end of a computation, 
-                     // used to reset the internal state of the PE
+                     // 只要 flag 为 1，PE 就会清空内部寄存器
     input wire data_in_vld, // Data valid signal from the left PE
     input wire [DATA_IN-1:0]  data_in_a, // A data from the left PE 
     input wire [DATA_OUT-1:0] data_in_add, // Partial sum from the above PE 
