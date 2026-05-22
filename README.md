@@ -2,6 +2,26 @@
 
 <img src="./README.md.pic/TopView.png" width="100%">
 
+## 面试口述版
+
+这个项目的顶层模块是 `TPU_TOP`，整体可以分成五个主要部分：AHB 从接口、寄存器配置模块、控制模块、AXI-Stream 输入输出模块，以及核心的脉动阵列计算模块。
+
+从系统角度看，它有两条主线：一条是控制流，另一条是计算数据流。控制流由 CPU 通过 AHB-Lite 发起，AHB 从接口先把标准总线访问转换成 TPU 内部的寄存器读写请求，然后交给 `RegisterMap` 处理。`RegisterMap` 是 CPU 和 TPU 内部硬件之间的配置/状态中转层，它定义了哪些地址对应控制寄存器、配置寄存器和状态寄存器。
+
+CPU 写 `RegisterMap` 中的控制和配置寄存器来设置 TPU 的使能、启动、复位、计算模式、矩阵尺寸以及 B 矩阵权重。因为当前阵列是 4x4，所以 B 权重会被拆成 16 个 32-bit 配置值，分别对应 16 个 PE 中固定保存的权重。同时，CPU 也可以从 `RegisterMap` 中读取状态寄存器，获取当前计算状态、完成标志、计数信息和错误状态。
+
+配置完成后，CPU 启动 TPU。控制模块会根据当前状态进入计算流程，并通知 AXI 输入侧开始接收 A 矩阵数据。输入数据通过 AXI-Stream slave 口进入，先写入输入 FIFO。这里使用 FIFO 是为了把外部 AXI 数据流和内部计算节奏解耦，避免两边必须严格同拍工作。
+
+在计算阶段，控制模块会从输入 FIFO 中读取数据。每次读出的是一组打包后的 A 数据，然后送入数据转换模块。数据转换模块会把输入拆成多路行输入，并根据脉动阵列的数据流要求给不同行加入延迟，使 A 数据能够在正确的时间进入对应的 PE 行。
+
+核心计算发生在 `SA_TOP` 中。`SA_TOP` 内部是一个 4x4 的权重固定型脉动阵列。每个 PE 保存一个 B 权重，A 数据在阵列中从左往右传播，部分和从上往下传播。每个 PE 做一次乘加运算，也就是用当前 A 数据乘以本地 B 权重，再加上从上方传来的部分和。最上面一行的部分和从 0 开始，经过多行 PE 逐级累加后，最底部一行输出的就是最终计算结果。
+
+计算结果会被拼成一组输出数据写入输出 FIFO。等计算结果准备好之后，控制模块会通知 AXI 输出侧开始发送数据。AXI-Stream master 口从输出 FIFO 中读取结果，并通过 `tvalid`、`tdata`、`tlast` 等信号把结果传给外部模块。
+
+最后，控制模块还会维护当前状态、计数信息、完成标志和错误状态。这些状态会返回到 `RegisterMap`，CPU 再通过 AHB 读取对应的状态寄存器，判断本轮计算是否完成，以及是否出现异常。
+
+一句话概括：CPU 通过 AHB 访问 `RegisterMap` 来配置和启动 TPU，并通过它读取状态；A 数据通过 AXI-Stream 输入并进入 FIFO，控制模块调度数据进入 4x4 脉动阵列，阵列使用预加载的 B 权重完成乘加计算，结果再通过输出 FIFO 和 AXI-Stream master 返回。
+
 
 ├── 1_rtl
 │   ├── AHB
@@ -31,12 +51,97 @@
     ├── lint.prj
     └── tpu_top.sgdc
 
+
+CPU 通过 AHB 配置控制寄存器和 B 权重，然后 start；AXI-Stream 输入 A 数据，进入输入 FIFO；
+控制模块按 FIFO 状态驱动读取，并通过数据转换模块做行间延迟；然后 A 数据进入 4x4 脉动阵列，与寄存器预加载的 B 权重做乘加；结果写入输出 FIFO，再通过 AXI-Stream master 输出；
+最后 CPU 通过 AHB 读状态寄存器确认计算完成。    
+
 ## systolic array `sa.v`
-1. 概述: 实例化 16*16 个 PE modules `pe.v` 形成一个脉动阵列 systolic array, 用于执行矩阵乘法
+1. 概述: 实例化 `ROW*COL` 个 PE modules `pe.v` 形成一个权重固定型脉动阵列 weight-stationary systolic array, 用于执行矩阵乘法 `C = A * B`
+   - `ROW`: PE 行数，在 weight-stationary 数据流中对应矩阵乘法的 K 维度
+   - `COL`: PE 列数，对应输出矩阵 C 的列维度 N
+   - `PE(r,c)`: 第 r 行第 c 列 PE，固定保存权重 `B[r][c]`
+   - `data_in_a`: 每一拍输入一组 A 数据，每个 PE row 一个 A 元素
+   - `data_in_b`: 打包所有 PE 的固定 B 权重
+   - `data_out`: 最底行 PE 输出的最终部分和，每列一个输出值
 2. I/O interface:
-   - `input wire [31:0] i_A [15][15];`
-   - `input wire [31:0] i_B [15][15];`
-   - `output wire [31:0] i_AB [15][15];`
+   - `input wire clk;`
+     `input wire rst_n;`
+     `input wire cpu_sw_rst_sync;`
+     `input wire cpu_tpu_start_sync;`
+     `input wire tpu_en;`
+     `input wire [1:0] cpt_mode;`
+     `input wire data_in_vld;`
+     `input wire [ROW*DW-1:0] data_in_a;`
+     `input wire [ROW*COL*DW-1:0] data_in_b;`
+   - `output wire data_out_vld;`
+     `output wire [COL*DW_OUT-1:0] data_out;`
+3. 内部逻辑描述:
+
+   1. weight-stationary 数据映射:
+      - 每个 PE 固定接收一个权重 `pe_weight_in`
+      - 第 r 行第 c 列 PE 的一维编号为 `PE_IDX = r * COL + c`
+      - `PE(r,c)` 使用的固定权重来自:
+        ```verilog
+        data_in_b[(PE_IDX+1)*DW-1 -: DW]
+        ```
+      - 对于矩阵乘法 `C = A * B`，可以理解为:
+        ```text
+        PE(r,c) 保存 B[r][c]
+        r 对应 K 维度
+        c 对应输出列 c
+        ```
+
+   2. A 数据横向流动:
+      - 第 0 列 PE 从 SA 左边界接收 A:
+        ```verilog
+        pe_input_in = data_in_a[(r+1)*DW-1 -: DW]
+        ```
+      - 其它列 PE 从左边相邻 PE 接收 A:
+        ```verilog
+        pe_input_in = pe_a_bus[((r*COL + c-1)+1)*DW-1 -: DW]
+        ```
+      - PE 内部把 `data_in_a` 打一拍输出为 `out_a`，继续传给右边 PE
+      - 因此 A 的流动方向是:
+        ```text
+        PE(r,0) -> PE(r,1) -> PE(r,2) -> ... -> PE(r,COL-1)
+        ```
+
+   3. 部分和纵向流动:
+      - 第 0 行 PE 从 0 开始累加:
+        ```verilog
+        pe_psum_in = {DW_OUT{1'b0}}
+        ```
+      - 其它行 PE 从正上方相邻 PE 接收部分和:
+        ```verilog
+        pe_psum_in = pe_psum_bus[(((r-1)*COL + c)+1)*DW_OUT-1 -: DW_OUT]
+        ```
+      - 每个 PE 做:
+        ```text
+        pe_psum_out = pe_psum_in + pe_input_in * pe_weight_in
+        ```
+      - 因此部分和的流动方向是:
+        ```text
+        PE(0,c) -> PE(1,c) -> PE(2,c) -> ... -> PE(ROW-1,c)
+        ```
+   4. 输出选择:
+      - 每一列的输出来自最底行 PE:
+        ```verilog
+        data_out[(c+1)*DW_OUT-1 -: DW_OUT] =
+            pe_psum_bus[(((ROW-1)*COL + c)+1)*DW_OUT-1 -: DW_OUT];
+        ```
+      - 当所有最底行 PE 的输出都有效时，`data_out_vld` 拉高:
+        ```verilog
+        data_out_vld = tpu_en & (&bottom_vld)
+        ```
+   5. 控制计数:
+      - `BASE_CYCLES = ROW + COL - 1`
+      - `pe_lat_by_mode` 表示 PE 内部延迟:
+        - int4/int8: 1 cycle
+        - fp32/fp16: 4 cycles
+      - `matmul_cycles = BASE_CYCLES + pe_lat_by_mode`
+      - `counter` 用于统计一轮数据流穿过阵列需要的周期数
+      - `flag_clear` 在软件复位、启动新计算、或一轮计算结束时拉高，用于清除 PE 内部状态
 
 ### multi-precision processing unit `pe.v`
 1. 概述: 每个PE模块对输入 `data_in_a`, `data_in_b` 支持四种精度运算(fp32, fp16, int8, int4), 根据 `cpt_mode` 选择不同计算通路，最终输出 32-bit partial sum
@@ -77,8 +182,8 @@
      `output reg out_a_vld;`
 3. 输出 latency:
    - int4/int8: 1 cycle
-   - fp32: 3 cycles
-   - fp16: 3 cycles
+   - fp32: 4 cycles
+   - fp16: 4 cycles
 
 
 #### fp32乘法 `pe_fp32_multiply.v`
