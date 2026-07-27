@@ -30,7 +30,7 @@ module sa #(
     input wire cpu_sw_rst_sync, // CPU software reset synchronized
         // CPU 通过软件写寄存器发出的复位信号，并且已经同步到 sa.v 使用的 clk 里
         // 表示 CPU 要求清除所有 PE 内部状态，准备开始新一轮计算。
-    input wire cpu_tpu_start_sync, // CPU TPU start synchronized
+    input wire cpu_sw_tpu_start_sync, // CPU TPU start synchronized
         // CPU 通过软件写寄存器发出的 TPU 启动信号，并且已经同步到 sa.v 使用的 clk 里
         // 表示 CPU 已经准备好输入数据、权重、模式等配置，然后通知 TPU：可以开始这一轮计算了
 
@@ -39,11 +39,11 @@ module sa #(
     input wire [1:0] cpt_mode, // 计算模式：00=INT4, 01=INT8, 10=FP16, 11=FP32
 
     // 输入数据
-    input wire              data_in_vld, // data_in_a 有效信号
-    input wire [ROW*DW-1:0] data_in_a,
+    input wire                   data_in_vld, // data_in_a 有效信号
+    input wire [ROW*DW-1:0]      data_in_a,
     // 在当前拍给每个 PE row 提供一个 A 元素：
     //   data_in_a[ (r+1)*DW-1 -: DW ] = 进入 row r 的 A 值。
-    input wire [ROW*COL*DW-1:0] data_in_b,
+    input wire [ROW*COL*DW-1:0]  data_in_b,
     // 在权重固定型数据流下，data_in_b 包含所有 PE 固定保存的权重：
     //   data_in_b[ ((r*COL+c)+1)*DW-1 -: DW ] = PE(r,c) 保存的 B 权重。
     
@@ -102,7 +102,7 @@ always @(posedge clk or negedge rst_n) begin
         // 软件复位：下一拍清除所有 PE 内部状态。
         counter    <= {COUNTER_WIDTH{1'b0}};
         flag_clear <= 1'b1;
-    end else if (tpu_en && cpu_tpu_start_sync) begin 
+    end else if (tpu_en && cpu_sw_tpu_start_sync) begin 
         // 开始新一轮计算：清除上一轮遗留的部分和。
         counter    <= {COUNTER_WIDTH{1'b0}};
         flag_clear <= 1'b1;

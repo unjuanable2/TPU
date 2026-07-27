@@ -1,4 +1,4 @@
-~/tpu/1_rtl/CTRL/src/tpu_ctrl.v
-~/tpu/1_rtl/CTRL/src/ctrl_cfg.v
-~/tpu/1_rtl/CTRL/src/ctrl_rpt.v
-~/tpu/1_rtl/CTRL/src/ctrl_data_trans.v
+~/tpu/rtl/Control/tpu_ctrl.v
+~/tpu/rtl/Control/ctrl_cfg.v
+~/tpu/rtl/Control/ctrl_rpt.v
+~/tpu/rtl/Control/ctrl_data_trans.v

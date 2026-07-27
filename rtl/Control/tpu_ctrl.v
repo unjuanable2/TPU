@@ -1,41 +1,41 @@
 module TPU_CTRL #(
     parameter ROW     = 4,
     parameter COL     = 4,
-    parameter DW      = 32,
-    parameter DW_OUT  = 32,
-    parameter FIFO_DW = 128
+    parameter DW      = 32, // input data width
+    parameter DW_OUT  = 32, // output data width
+    parameter FIFO_DW = 128 // FIFO data width, should be no less than ROW*DW
 )(  
-    //System interface
-    input  wire                     sys_clk,
-    input  wire                     ahb_clk,
-    input  wire                     rst_n,
+    // System interface
+    input  wire rst_n,   // 来自 CPU 的全局复位信号，低电平有效
+    input  wire sys_clk, // 系统时钟域(400MHz)
+    input  wire ahb_clk, // AHB 时钟域(100MHz)
     
-    //REG MAP interface
-    input  wire                     cpu_tpu_en,
-    input  wire                     cpu_sw_rst,
-    input  wire                     cpu_tpu_start,
-    input  wire [1:0]               cpu_cpt_mode,
-    output wire                     rpt_compute_done,
-    output wire [31:0]              rpt_loop_count,
-    output wire [2:0]               rpt_fsm_state,
-    output wire                     rpt_error_state,
+    // REG_MAP interface
+    input  wire        cpu_tpu_en, // TPU 模块使能信号，静态配置
+    input  wire        cpu_sw_rst, // 
+    input  wire        cpu_tpu_start,
+    input  wire [1:0]  cpu_cpt_mode,
+    output wire        rpt_compute_done,
+    output wire [31:0] rpt_loop_count,
+    output wire [2:0]  rpt_fsm_state,
+    output wire        rpt_error_state,
     
-    //SA_TOP interface
-    output wire                     cpu_sw_rst_sync,
-    output wire                     cpu_tpu_start_sync,
-    output wire                     dat_out_vld,
-    output wire [ROW*DW_OUT-1:0]    dat_out,
+    // SA_TOP interface
+    output wire                  cpu_sw_rst_sync,
+    output wire                  cpu_tpu_start_sync,
+    output wire                  dat_out_vld,
+    output wire [ROW*DW_OUT-1:0] dat_out,
     
-    //AXI interface
-    output wire                     cpu_tpu_en_sync,
-    output reg                      rd_start,
-    output reg                      wr_start,
-    output reg  [31:0]              wr_out_len,
+    // AXI interface
+    output wire       cpu_tpu_en_sync,
+    output reg        rd_start,
+    output reg        wr_start,
+    output reg [31:0] wr_out_len,
     
-    //FIFO_IN interface
-    output wire                     fifo_in_re,
-    input  wire                     fifo_pre_empty,
-    input  wire [FIFO_DW-1:0]       fifo_in_rdata
+    // FIFO_IN interface
+    output wire               fifo_in_re,
+    input  wire               fifo_pre_empty,
+    input  wire [FIFO_DW-1:0] fifo_in_rdata
 );
 
 localparam IDLE  = 3'd0;

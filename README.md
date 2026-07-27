@@ -378,3 +378,9 @@ CPU 写 `RegisterMap` 中的控制和配置寄存器来设置 TPU 的使能、�
    7. 输出时序:
       - `out_comb` 是组合逻辑计算结果
       - `out` 在 `posedge clk` 打一拍输出，`rst_n` 拉低时清 0
+
+## `ahb_slave.v`
+- 详细时序
+  <img src="./README.md.pic/image-4.png" width="60%">
+
+## AXI
